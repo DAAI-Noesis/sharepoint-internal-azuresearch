@@ -64,14 +64,14 @@ def shareAI(req: func.HttpRequest) -> func.HttpResponse:
                 search_text=query,  
                 vector_queries= [vector_query],
                 search_mode="all",
-                select=["chunk", "name", "path", "last_modified", "uri"],
-                filter="not search.ismatch('01-Private','path')",
-                top=4
+                select=["chunk", "name", "path", "last_modified", "uri","summary"],
+            filter="not search.ismatch('01-Private','path')",
+            top=4
             )
-
+ 
             context = ""
             for i,result in enumerate(results):
-                context += f"Document #{i}\n\nName:{result['name']}\nContent: {result['chunk']}.\n\nURI: {result['uri']}\n\n"
+                context += f"Document #{i}\n\nName:{result['name']}\nContent: {result['summary']}.\n\nURI: {result['uri']}\n\n"
                 
             logging.info(context)
 
