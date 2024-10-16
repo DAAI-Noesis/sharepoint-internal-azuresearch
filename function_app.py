@@ -31,9 +31,9 @@ def shareAI(req: func.HttpRequest) -> func.HttpResponse:
     if not query:
         return func.HttpResponse(f"No query was received in this request. It's mandatory to ask for something.")
     else:
-        logging.info(os.environ.get("AI_SEARCH_API_KEY"))
-        logging.info(os.environ.get("AI_SEARCH_ENDPOINT"))
-        logging.info(os.environ.get("AI_SEARCH_INDEX"))
+        #logging.info(os.environ.get("AI_SEARCH_API_KEY"))
+        #logging.info(os.environ.get("AI_SEARCH_ENDPOINT"))
+        #logging.info(os.environ.get("AI_SEARCH_INDEX"))
         try:
             template = """
             <|im_start|>system
