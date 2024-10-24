@@ -1,0 +1,6 @@
+notebooks
+.venv
+local.settings.json
+host.json
+.vscode
+__pycache__
