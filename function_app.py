@@ -11,7 +11,7 @@ import json
 from azure.search.documents.models import VectorizableTextQuery
 
 from azure.ai.textanalytics.aio import TextAnalyticsClient
-from scripts.prompting import create_prompt_from_documents
+from scripts.prompting import create_prompt_from_documents,load_prompt,generate_augmented_query
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
 
@@ -85,7 +85,6 @@ def shareAI(req: func.HttpRequest) -> func.HttpResponse:
             CONTEXT:
             {context}
             """
-
             vector_query = VectorizableTextQuery(text=query, k_nearest_neighbors=4, fields="summary_embedding", exhaustive=True)
 
             #results =  client.search(vector_queries=[vector_query], search_mode="all", query_type="full", select="*")
@@ -94,7 +93,7 @@ def shareAI(req: func.HttpRequest) -> func.HttpResponse:
                 search_text=query,  
                 vector_queries= [vector_query],
                 search_mode="all",
-                select=["chunk", "name", "path", "last_modified", "uri","summary"],
+                select=["name", "path", "last_modified", "uri","summary"],
             filter="not search.ismatch('01-Private','path')",
             top=4
             )
@@ -102,7 +101,7 @@ def shareAI(req: func.HttpRequest) -> func.HttpResponse:
             context = ""
             prompt_from_docs = create_prompt_from_documents(results)
             for i,result in enumerate(results):
-                context += f"Reference #{i}\n\nName:{result['name']}\nDocument Summary: {result['summary']}\n\nChunk: {result['chunk']}\nURI: {result['uri']}\n\n"
+                context += f"Reference #{i}\n\nName:{result['name']}\nDocument Summary: {result['summary']}\n\nURI: {result['uri']}\n\n"
                 
            
             
@@ -181,4 +180,93 @@ async def summarize(req: func.HttpRequest) -> func.HttpResponse:
             "{\"response\": \"" +str(err)+ "\"}",
             status_code=500
             )
+
+@app.route(route="ask", auth_level=func.AuthLevel.ANONYMOUS)
+async def ask(req: func.HttpRequest) -> func.HttpResponse:
+    logging.info('Chat trigger function')
+
+    # Retrieve the query and chat history from request parameters
+    data = req.get_json()
+    query = data.get('query')
+    chat_history = data.get('chat_history')
+
+    if not query:
+        return func.HttpResponse("No query was received in this request. It's mandatory to ask for something.", status_code=400)
+    
+    # Parse chat history from JSON if it exists
+    conversation_history = []
+    if chat_history:
+        try:
+            conversation_history = chat_history
+        except json.JSONDecodeError as e:
+            logging.error("Failed to decode chat history JSON")
+            return func.HttpResponse("Invalid chat history format.", status_code=400)
+
+    try:
+        #Generate augmented query
+        augmented_query = generate_augmented_query(query=query,chat_history=conversation_history,openai_client=client)
+        logging.info("Generated Query:------------\n"+augmented_query)
+
+
+        # Load the system template for the RAG prompt
+        system_template, _ = load_prompt("rag")
+
+        # Set up a vectorized query
+        vector_query = VectorizableTextQuery(
+            text=augmented_query,
+            k_nearest_neighbors=20,
+            fields="summary_embedding",
+            exhaustive=True
+        )
+
+        # Execute search on the index with vector query
+        results = search_client.search(
+            search_text=query,  
+            vector_queries=[vector_query],
+            search_mode="all",
+            select=["name", "path", "last_modified", "uri", "summary"],
+            filter="not search.ismatch('01-Private','path')",
+            top=20
+        )
+
+        # Format results into a prompt for the system message
+        context = ""
+        prompt_from_docs = create_prompt_from_documents(results)
+        for i, result in enumerate(results):
+            context += f"Reference #{i}\n\nName: {result['name']}\nDocument Summary: {result['summary']}\n\nURI: {result['uri']}\n\n"
+
+        # Format the system prompt with document results
+        system_prompt = system_template.format(context=prompt_from_docs)
+        logging.info("System prompt:\n" + system_prompt)
+
+        # Prepare messages with chat history
+        messages = [{"role": "system", "content": system_prompt}]
+        for message in conversation_history:
+            messages.append({"role": message["role"], "content": message["content"]})
         
+        # Add the latest user query
+        messages.append({"role": "user", "content": query})
+
+        # Generate completion from the model
+        completion = client.chat.completions.create(
+            model="gpt-4o",
+            messages=messages
+        )
+        
+        response = completion.choices[0].message.content
+        logging.info("User Query: " + query)
+        logging.info("Model Response: " + response)
+
+        # Return the response as JSON
+        return func.HttpResponse(
+            json.dumps({"response": response}),
+            mimetype="application/json",
+            status_code=200
+        )
+
+    except ValueError as err:
+        logging.error("Error processing request: " + str(err))
+        return func.HttpResponse(
+            json.dumps({"response": str(err)}),
+            status_code=500
+        )
