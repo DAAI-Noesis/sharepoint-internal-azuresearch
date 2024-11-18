@@ -71,7 +71,7 @@ def generate_augmented_query(query, chat_history,openai_client):
 def load_prompt(name):
     system_prompt = _load_role_prompt(name, "system")
     user_prompt = _load_role_prompt(name, "user")
-    return f'{system_prompt}', f'{user_prompt}'
+    return f"""{system_prompt}""", f"""{user_prompt}"""
 
 def _load_role_prompt(name, role):
     role_prompt_file = f"./prompts/{name}/{name}.{role}.md"

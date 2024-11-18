@@ -237,7 +237,7 @@ async def ask(req: func.HttpRequest) -> func.HttpResponse:
 
         # Format the system prompt with document results
         system_prompt = system_template.format(context=prompt_from_docs)
-        logging.info("System prompt:\n" + system_prompt)
+        #logging.info("System prompt:\n" + system_prompt)
 
         # Prepare messages with chat history
         messages = [{"role": "system", "content": system_prompt}]
@@ -249,17 +249,18 @@ async def ask(req: func.HttpRequest) -> func.HttpResponse:
 
         # Generate completion from the model
         completion = client.chat.completions.create(
+            response_format={"type":"json_object"},
             model="gpt-4o",
             messages=messages
         )
-        
+
         response = completion.choices[0].message.content
         logging.info("User Query: " + query)
         logging.info("Model Response: " + response)
 
         # Return the response as JSON
         return func.HttpResponse(
-            json.dumps({"response": response}),
+            response,
             mimetype="application/json",
             status_code=200
         )
