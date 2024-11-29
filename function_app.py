@@ -6,6 +6,7 @@ from openai import AzureOpenAI
 import azure.core
 import azure.search.documents
 import json
+from utils.crm_retrieval import get_region_and_industry
 # from azure.core.credentials import AzureKeyCredential
 # from azure.search.documents import SearchClient
 from azure.search.documents.models import VectorizableTextQuery
@@ -23,6 +24,66 @@ client = AzureOpenAI(
     api_version="2024-02-15-preview",
     azure_endpoint=os.environ.get("AZURE_OPENAI_API_ENDPOINT"),
 )
+@app.route(route="extract_metadata", auth_level=func.AuthLevel.ANONYMOUS)
+async def extract_metadata(req: func.HttpRequest) -> func.HttpResponse:
+    logging.info("Azure Search Custom Skill triggered.")
+
+    # Parse the input JSON
+    try:
+        input_data = req.get_json()
+    except ValueError:
+        return func.HttpResponse(
+            "Invalid JSON input.",
+            status_code=400
+        )
+
+    # Extract parameters from input
+    records = input_data.get("values", [])
+    results = []
+
+    for record in records:
+        record_id = record.get("recordId")
+        if not record_id:
+            continue
+
+        data = record.get("data", {})
+        folder_name = data.get("folder_name")  # Folder name from the document
+        opportunity_id = data.get("opportunity_id")  # Opportunity ID from the document
+        document_name = data.get("document_name")
+        # Call Dynamics API to retrieve region and industry
+        try:
+            enriched_data = get_region_and_industry(folder_name, document_name)
+            logging.info("Got enriched data.")
+            if enriched_data:
+                results.append({
+                    "recordId": record_id,
+                    "data": {
+                        "region": enriched_data.get("region", "Unknown"),
+                        "industry": enriched_data.get("industry", "Unknown")
+                    }
+                })
+            else:
+                results.append({
+                    "recordId": record_id,
+                    "data": {
+                        "region": None,
+                        "industry": None
+                    },
+                    "errors": [{"message": "No matching data found in Dynamics."}]
+                })
+            logging.info("Extracted values:\n",enriched_data)
+        except Exception as e:
+            logging.error(f"Error processing record {record_id}: {e}")
+            results.append({
+                "recordId": record_id,
+                "data": {},
+                "errors": [{"message": str(e)}]
+            })
+
+    return func.HttpResponse(
+        body=json.dumps({"values": results}),
+        mimetype="application/json"
+    )
 
 @app.route(route="summarize", auth_level=func.AuthLevel.ANONYMOUS)
 async def summarize(req: func.HttpRequest) -> func.HttpResponse:
@@ -68,6 +129,7 @@ async def summarize(req: func.HttpRequest) -> func.HttpResponse:
             "{\"response\": \"" +str(err)+ "\"}",
             status_code=500
             )
+
 
 @app.route(route="ask", auth_level=func.AuthLevel.ANONYMOUS)
 async def ask(req: func.HttpRequest) -> func.HttpResponse:
