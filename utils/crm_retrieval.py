@@ -34,6 +34,7 @@ def get_region_and_industry(folder_name, document_name):
       <condition attribute="relativeurl" operator="eq" value="{folder_name}" />
       <condition attribute="name" operator="eq" value="{folder_name}" />
       <condition entityname="OPPORTUNITY" attribute="new_sapid" operator="eq" value="{sapid}" />
+      <condition entityname="OPPORTUNITY" attribute="new_oportunidade" operator="eq" value="{opportunity_id}" />
     </filter>
     <link-entity name="account" from="accountid" to="regardingobjectid" alias="ACCOUNT">
       <attribute name="accountid" />
@@ -55,7 +56,8 @@ def get_region_and_industry(folder_name, document_name):
     fetchXml = fetchXmlTemplate.format(
         folder_name=folder_name,
         document_name=document_name,
-        sapid=sapid
+        sapid=sapid,
+        opportunity_id=opportunity_id
     )
     logging.info(fetchXml)
 
