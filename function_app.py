@@ -6,6 +6,7 @@ from openai import AzureOpenAI
 import azure.core
 import azure.search.documents
 import json
+from utils.crm_retrieval import get_region_and_industry
 # from azure.core.credentials import AzureKeyCredential
 # from azure.search.documents import SearchClient
 from azure.search.documents.models import VectorizableTextQuery
@@ -23,119 +24,67 @@ client = AzureOpenAI(
     api_version="2024-02-15-preview",
     azure_endpoint=os.environ.get("AZURE_OPENAI_API_ENDPOINT"),
 )
+@app.route(route="extract_metadata", auth_level=func.AuthLevel.ANONYMOUS)
+async def extract_metadata(req: func.HttpRequest) -> func.HttpResponse:
+    logging.info("Azure Search Custom Skill triggered.")
 
-@app.route(route="shareAI", auth_level=func.AuthLevel.ANONYMOUS)
-def shareAI(req: func.HttpRequest) -> func.HttpResponse:
-    logging.info('Chat trigger function')
-
-    query = req.params.get('query')
-    if not query:
-        return func.HttpResponse(f"No query was received in this request. It's mandatory to ask for something.")
-    else:
-        #logging.info(os.environ.get("AI_SEARCH_API_KEY"))
-        #logging.info(os.environ.get("AI_SEARCH_ENDPOINT"))
-        #logging.info(os.environ.get("AI_SEARCH_INDEX"))
-        try:
-            template = """
-            <|im_start|>system
-            You are Noe, a helpful assistant that helps users find information on relevant documents from the company you work for, Noesis.
-            You are an expert assistant trained to retrieve relevant information from a provided document or chunk. When answering questions, follow these rules strictly:
-
-            1. **Answer Structure**: 
-                - First, provide a **concise and accurate response** to the question.
-                - Follow this with a **reference section** that includes the sources you used for the answer.
-
-            2. **Reference Use**: 
-                - Every piece of information in your answer must be directly tied to a **specific part** of the document or chunk used. 
-                - If multiple pieces of the document contribute to the answer, provide clear citations for each one.
-
-            3. **Answer Format**:
-                - The response should be broken down into **paragraphs** if it involves multiple points.
-                - Ensure **clarity** and **brevity** in your explanations. Do not add unnecessary information.
-
-            4. **Reference Format**:
-                - After providing your response, output a separate section titled "References".
-                - Each reference should be on a new line, listed as:
-                - Reference [X]: Include the **specific sentence(s)** or **paragraph(s)** from the chunk used in your answer.
-                - Ensure that each reference ends with the corresponding URI.
-                - If possible, also **summarize** the reference source for better clarity.
-
-            5. **Example Output Format**:
-                - Ensure your response looks exactly like the following example:
-
-                ```
-                ### Answer:
-                [Your answer here. Be concise but detailed. Make sure you address the question directly.]
-
-                ### References:
-                - Reference [1]: [Brief reference content here—specific sentence, paragraph, or section](Reference URI: https://example.com)
-                - Reference [2]: [Another brief reference content here—specific sentence, paragraph, or section](Reference URI: https://another.com)
-
-                ```
-
-            6. **Precision**: Always reference the **relevant context** accurately. If no appropriate reference exists for a part of the answer, explicitly state this in the reference section as:
-                - **"Reference [X]: No specific reference found in the provided chunk."**
-
-            7. **Avoid Guessing**: If you cannot confidently answer the question based on the available context, provide a polite explanation that the information is not available, and reference the closest information related to the query.
-
-            8. **Attention to Detail**: Double-check that you are following the format exactly as specified, and that the references point to the most relevant sections of the document.
-
-            Now, based on these instructions and the following context, respond to user queries by pulling the relevant information from the chunks provided.
-            
-            CONTEXT:
-            {context}
-            """
-            vector_query = VectorizableTextQuery(text=query, k_nearest_neighbors=4, fields="summary_embedding", exhaustive=True)
-
-            #results =  client.search(vector_queries=[vector_query], search_mode="all", query_type="full", select="*")
-
-            results = search_client.search(
-                search_text=query,  
-                vector_queries= [vector_query],
-                search_mode="all",
-                select=["name", "path", "last_modified", "uri","summary"],
-            filter="not search.ismatch('01-Private','path')",
-            top=4
-            )
-
-            context = ""
-            prompt_from_docs = create_prompt_from_documents(results)
-            for i,result in enumerate(results):
-                context += f"Reference #{i}\n\nName:{result['name']}\nDocument Summary: {result['summary']}\n\nURI: {result['uri']}\n\n"
-                
-           
-            
-            prompt = template.format(context=prompt_from_docs, query=query)
-            
-            logging.info("----------------------------------GENERATED PROMPT--------------------------------\n\n"+prompt)
-
-            completion = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {
-                    "role": "system",
-                    "content": prompt,
-                },
-                {
-                    "role": "user",
-                    "content": query,
-                },
-            ],
-            )
-            response = completion.choices[0].message.content
-            logging.info(query)
-            logging.info(response)
-            return func.HttpResponse(
-            "{\"response\": \"" + response + "\"}",
-            mimetype="application/json",
-            status_code=200
+    # Parse the input JSON
+    try:
+        input_data = req.get_json()
+    except ValueError:
+        return func.HttpResponse(
+            "Invalid JSON input.",
+            status_code=400
         )
-        except ValueError as err:
-            logging.info(err)
-            func.HttpResponse(
-            "{\"response\": \"" + err + "\"}",
-            status_code=500
-            )
+
+    # Extract parameters from input
+    records = input_data.get("values", [])
+    results = []
+
+    for record in records:
+        record_id = record.get("recordId")
+        if not record_id:
+            continue
+
+        data = record.get("data", {})
+        folder_name = data.get("folder_name")  # Folder name from the document
+        opportunity_id = data.get("opportunity_id")  # Opportunity ID from the document
+        document_name = data.get("document_name")
+        # Call Dynamics API to retrieve region and industry
+        try:
+            enriched_data = get_region_and_industry(folder_name, document_name)
+            logging.info("Got enriched data.")
+            if enriched_data:
+                results.append({
+                    "recordId": record_id,
+                    "data": {
+                        "region": enriched_data.get("region", "Unknown"),
+                        "industry": enriched_data.get("industry", "Unknown")
+                    }
+                })
+            else:
+                results.append({
+                    "recordId": record_id,
+                    "data": {
+                        "region": None,
+                        "industry": None
+                    },
+                    "errors": [{"message": "No matching data found in Dynamics."}]
+                })
+            logging.info("Extracted values:\n",enriched_data)
+        except Exception as e:
+            logging.error(f"Error processing record {record_id}: {e}")
+            results.append({
+                "recordId": record_id,
+                "data": {},
+                "errors": [{"message": str(e)}]
+            })
+
+    return func.HttpResponse(
+        body=json.dumps({"values": results}),
+        mimetype="application/json"
+    )
+
 @app.route(route="summarize", auth_level=func.AuthLevel.ANONYMOUS)
 async def summarize(req: func.HttpRequest) -> func.HttpResponse:
     logging.info('Chat trigger function for summarizing text')
@@ -180,6 +129,7 @@ async def summarize(req: func.HttpRequest) -> func.HttpResponse:
             "{\"response\": \"" +str(err)+ "\"}",
             status_code=500
             )
+
 
 @app.route(route="ask", auth_level=func.AuthLevel.ANONYMOUS)
 async def ask(req: func.HttpRequest) -> func.HttpResponse:
@@ -237,7 +187,7 @@ async def ask(req: func.HttpRequest) -> func.HttpResponse:
 
         # Format the system prompt with document results
         system_prompt = system_template.format(context=prompt_from_docs)
-        logging.info("System prompt:\n" + system_prompt)
+        #logging.info("System prompt:\n" + system_prompt)
 
         # Prepare messages with chat history
         messages = [{"role": "system", "content": system_prompt}]
@@ -249,17 +199,18 @@ async def ask(req: func.HttpRequest) -> func.HttpResponse:
 
         # Generate completion from the model
         completion = client.chat.completions.create(
+            response_format={"type":"json_object"},
             model="gpt-4o",
             messages=messages
         )
-        
+
         response = completion.choices[0].message.content
         logging.info("User Query: " + query)
         logging.info("Model Response: " + response)
 
         # Return the response as JSON
         return func.HttpResponse(
-            json.dumps({"response": response}),
+            response,
             mimetype="application/json",
             status_code=200
         )
