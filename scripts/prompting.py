@@ -34,7 +34,7 @@ def create_prompt_from_documents(documents):
     
     return prompt
 
-def generate_augmented_query(query, chat_history,openai_client):
+async def generate_augmented_query(query, chat_history,openai_client):
     """
     Generate a system prompt with chat history and the user's current query.
     
@@ -60,7 +60,7 @@ def generate_augmented_query(query, chat_history,openai_client):
     # Append the current user query at the end of the prompt
     prompt = system_prompt.format(conversation_context=history,user_query=query)
     
-    completion = openai_client.chat.completions.create(
+    completion = await openai_client.chat.completions.create(
             model="gpt-4o",
             messages=[{"role":"system","content":prompt}]
         )

@@ -2,17 +2,17 @@ import azure.core.credentials
 import azure.functions as func
 import logging
 import os
-from openai import AzureOpenAI
+from openai import AzureOpenAI,AsyncAzureOpenAI
 import azure.core
 import azure.search.documents
 import json
-from utils.crm_retrieval import get_region_and_industry
-# from azure.core.credentials import AzureKeyCredential
-# from azure.search.documents import SearchClient
-from azure.search.documents.models import VectorizableTextQuery
 
-from azure.ai.textanalytics.aio import TextAnalyticsClient
+from utils.crm_retrieval import get_region_and_industry
+from utils.client_information_retrieval import get_client_info_gpt
 from scripts.prompting import create_prompt_from_documents,load_prompt,generate_augmented_query
+
+from azure.search.documents.models import VectorizableTextQuery
+from azure.ai.textanalytics.aio import TextAnalyticsClient
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
 
@@ -20,10 +20,11 @@ credential = azure.core.credentials.AzureKeyCredential(os.environ.get("AI_SEARCH
 language_credential = azure.core.credentials.AzureKeyCredential(os.environ.get("LANGUAGE_API_KEY"))
 search_client = azure.search.documents.SearchClient(endpoint=os.environ.get("AI_SEARCH_ENDPOINT"), index_name=os.environ.get("AI_SEARCH_INDEX"), credential=credential)
 
-client = AzureOpenAI(
+client = AsyncAzureOpenAI(
     api_version="2024-02-15-preview",
     azure_endpoint=os.environ.get("AZURE_OPENAI_API_ENDPOINT"),
 )
+
 @app.route(route="extract_metadata", auth_level=func.AuthLevel.ANONYMOUS)
 async def extract_metadata(req: func.HttpRequest) -> func.HttpResponse:
     logging.info("Azure Search Custom Skill triggered.")
@@ -54,12 +55,16 @@ async def extract_metadata(req: func.HttpRequest) -> func.HttpResponse:
         try:
             enriched_data = get_region_and_industry(folder_name, document_name)
             logging.info("Got enriched data.")
-            if enriched_data:
+            
+            client_information = await get_client_info_gpt(folder_name,client)
+
+            if enriched_data and client_information:
                 results.append({
                     "recordId": record_id,
                     "data": {
                         "region": enriched_data.get("region", "Unknown"),
-                        "industry": enriched_data.get("industry", "Unknown")
+                        "industry": enriched_data.get("industry", "Unknown"),
+                        "client_information":client_information
                     }
                 })
             else:
@@ -72,6 +77,8 @@ async def extract_metadata(req: func.HttpRequest) -> func.HttpResponse:
                     "errors": [{"message": "No matching data found in Dynamics."}]
                 })
             logging.info("Extracted values:\n",enriched_data)
+
+
         except Exception as e:
             logging.error(f"Error processing record {record_id}: {e}")
             results.append({
@@ -79,6 +86,7 @@ async def extract_metadata(req: func.HttpRequest) -> func.HttpResponse:
                 "data": {},
                 "errors": [{"message": str(e)}]
             })
+    
 
     return func.HttpResponse(
         body=json.dumps({"values": results}),
@@ -154,7 +162,7 @@ async def ask(req: func.HttpRequest) -> func.HttpResponse:
 
     try:
         #Generate augmented query
-        augmented_query = generate_augmented_query(query=query,chat_history=conversation_history,openai_client=client)
+        augmented_query = await generate_augmented_query(query=query,chat_history=conversation_history,openai_client=client)
         logging.info("Generated Query:------------\n"+augmented_query)
 
 
