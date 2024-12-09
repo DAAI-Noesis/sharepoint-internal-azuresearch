@@ -8,7 +8,8 @@ import azure.search.documents
 import json
 
 from utils.crm_retrieval import get_region_and_industry
-from utils.client_information_retrieval import get_client_info_gpt
+from utils.client_information_retrieval import get_client_info_gpt,extract_client_name
+
 from scripts.prompting import create_prompt_from_documents,load_prompt,generate_augmented_query
 
 from azure.search.documents.models import VectorizableTextQuery
@@ -38,59 +39,62 @@ async def extract_metadata(req: func.HttpRequest) -> func.HttpResponse:
             status_code=400
         )
 
-    # Extract parameters from input
+    # Extract records from input
     records = input_data.get("values", [])
-    results = []
+    output_records={"values":[]}
 
     for record in records:
         record_id = record.get("recordId")
         if not record_id:
+            logging.warning("Record without recordId found, skipping.")
             continue
 
         data = record.get("data", {})
-        folder_name = data.get("folder_name")  # Folder name from the document
-        opportunity_id = data.get("opportunity_id")  # Opportunity ID from the document
-        document_name = data.get("document_name")
-        # Call Dynamics API to retrieve region and industry
-        try:
-            enriched_data = get_region_and_industry(folder_name, document_name)
-            logging.info("Got enriched data.")
-            
-            client_information = await get_client_info_gpt(folder_name,client)
+        file_path = data.get("path_to_file", "")
+        document_name = data.get("document_name", "")
 
-            if enriched_data and client_information:
-                results.append({
+        try:
+            # Extract client name from the file path
+            client_name_folder = extract_client_name(file_path)
+
+            # Enrich metadata
+            enriched_data = get_region_and_industry(client_name_folder, document_name)
+
+            if enriched_data:
+                logging.info(f"Got Enriched Data:{enriched_data}")
+                output_records["values"].append({
                     "recordId": record_id,
                     "data": {
                         "region": enriched_data.get("region", "Unknown"),
                         "industry": enriched_data.get("industry", "Unknown"),
-                        "client_information":client_information
+                        "client_name": enriched_data.get("client_name","Unkown"),
+                        "client_information": await get_client_info_gpt(enriched_data["client_name"],enriched_data["region"],enriched_data["industry"], client)
                     }
                 })
+                logging.info(f"Processed record {record_id} successfully.")
             else:
-                results.append({
+                output_records["values"].append({
                     "recordId": record_id,
-                    "data": {
-                        "region": None,
-                        "industry": None
-                    },
-                    "errors": [{"message": "No matching data found in Dynamics."}]
+                    "data": {"region":"",
+                             "industry":"",
+                             "client_name":client_name_folder,
+                             "client_information":await get_client_info_gpt(client_name_folder,"No region found","No industry found", client),
+                             }
                 })
-            logging.info("Extracted values:\n",enriched_data)
-
 
         except Exception as e:
-            logging.error(f"Error processing record {record_id}: {e}")
-            results.append({
+            logging.exception(f"Error processing record {record_id}: {e}")
+            output_records["values"].append({
                 "recordId": record_id,
-                "data": {},
-                "errors": [{"message": str(e)}]
+                "errors": [{"message": str(e)}],
+                "warnings":""
             })
-    
 
+    # Return the response in the expected format
     return func.HttpResponse(
-        body=json.dumps({"values": results}),
-        mimetype="application/json"
+        body=json.dumps(output_records,default=lambda obj: obj.__dict__),
+        mimetype="application/json",
+        status_code=200
     )
 
 @app.route(route="summarize", auth_level=func.AuthLevel.ANONYMOUS)
@@ -182,7 +186,7 @@ async def ask(req: func.HttpRequest) -> func.HttpResponse:
             search_text=query,  
             vector_queries=[vector_query],
             search_mode="all",
-            select=["name", "path", "last_modified", "uri", "summary"],
+            select=["name", "path", "last_modified", "uri", "summary","client_name","industry","region","client_information"],
             filter="not search.ismatch('01-Private','path')",
             top=20
         )
@@ -206,7 +210,7 @@ async def ask(req: func.HttpRequest) -> func.HttpResponse:
         messages.append({"role": "user", "content": query})
 
         # Generate completion from the model
-        completion = client.chat.completions.create(
+        completion = await client.chat.completions.create(
             response_format={"type":"json_object"},
             model="gpt-4o",
             messages=messages

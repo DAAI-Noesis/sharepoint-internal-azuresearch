@@ -17,37 +17,37 @@ def get_region_and_industry(folder_name, document_name):
         dict: A dictionary with "region" and "industry".
     """
     TOKEN = acquire_token() # Replace with dynamic token retrieval for production
-    URL = os.environ.get("TOKEN_RETRIEVAL_URL")
+    URL =  os.environ.get("TOKEN_RETRIEVAL_URL")
     logging.info(f"Getting region and industry for {folder_name}, document {document_name}")
     if document_name:
-        sapid,opportunity_id  = extract_ids_from_file_name(document_name)
+        sapid,opportunity_id,account_number  = extract_ids_from_file_name(document_name)
     else:
         sapid,opportunity_id = "None"
 
     # FetchXML Template
     fetchXmlTemplate = """<fetch>
-  <entity name="sharepointdocumentlocation">
-    <attribute name="name" />
-    <attribute name="sharepointdocumentlocationid" />
-    <attribute name="relativeurl" />
-    <filter type="or">
-      <condition attribute="relativeurl" operator="eq" value="{folder_name}" />
-      <condition attribute="name" operator="eq" value="{folder_name}" />
-      <condition entityname="OPPORTUNITY" attribute="new_sapid" operator="eq" value="{sapid}" />
-      <condition entityname="OPPORTUNITY" attribute="new_oportunidade" operator="eq" value="{opportunity_id}" />
-    </filter>
-    <link-entity name="account" from="accountid" to="regardingobjectid" alias="ACCOUNT">
-      <attribute name="accountid" />
-      <attribute name="name" />
-      <attribute name="noesis_industry" />
-      <attribute name="noesis_country" />
-      <link-entity name="opportunity" from="customerid" to="accountid" alias="OPPORTUNITY">
-        <attribute name="new_sapid" />
-        <attribute name="new_oportunidade" />
-        <attribute name="opportunityid" />
-      </link-entity>
-    </link-entity>
-  </entity>
+<entity name="account">
+<attribute name="accountid" />
+<attribute name="name" />
+<attribute name="noesis_industry" />
+<attribute name="noesis_country" />
+<filter type="or">
+<condition attribute="name" operator="eq" value="{folder_name}"/>
+<condition attribute="accountnumber" operator="eq" value="{account_number}" />
+<condition entityname="OPPORTUNITY" attribute="new_sapid" operator="eq" value="{sapid}" />
+<condition entityname="OPPORTUNITY" attribute="new_oportunidade" operator="eq" value="{opportunity_id}" />
+</filter>
+<link-entity name="opportunity" from="customerid" to="accountid" alias="OPPORTUNITY">
+<attribute name="new_sapid" />
+<attribute name="new_oportunidade" />
+<attribute name="opportunityid" />
+<filter type="or">
+<!--<condition attribute="new_sapid" operator="eq" value="BCTT-0N005" />-->
+<!--<condition attribute="modifiedon" operator="last-x-years" value="1" />-->
+<!--<condition attribute="createdon" operator="last-x-years" value="1" />-->
+</filter>
+</link-entity>
+</entity>
 </fetch>
 
 """
@@ -55,7 +55,7 @@ def get_region_and_industry(folder_name, document_name):
     # Populate the FetchXML with parameters
     fetchXml = fetchXmlTemplate.format(
         folder_name=folder_name,
-        document_name=document_name,
+        account_number=account_number,
         sapid=sapid,
         opportunity_id=opportunity_id
     )
@@ -76,17 +76,17 @@ def get_region_and_industry(folder_name, document_name):
     response = requests.get(URL, headers=headers, params={"fetchXml": encoded_fetchXml})
     if response.status_code != 200:
         raise Exception(f"API request failed with status {response.status_code}: {response.text}")
-    logging.info(response.json())
+    logging.info(response.json()["value"])
     # Parse the JSON response
     results = response.json()["value"]
-    
     if results:
         item = results[0]  # We only need the first match
         answer = {
-            "region": item.get("ACCOUNT.noesis_country@OData.Community.Display.V1.FormattedValue", "Unknown"),
-            "industry": item.get("ACCOUNT.noesis_industry@OData.Community.Display.V1.FormattedValue", "Unknown")
+            "region": item.get("_noesis_country_value@OData.Community.Display.V1.FormattedValue", "Unknown"),
+            "industry": item.get("_noesis_industry_value@OData.Community.Display.V1.FormattedValue", "Unknown"),
+            "client_name": item.get("name", "Unknown")
         }
-        logging.info(answer)
+        logging.info(f"Found {answer['client_name']}\n Industry:{answer['industry']}\nRegion{answer['region']}")
         return answer
     
     return None
@@ -151,9 +151,9 @@ def extract_ids_from_file_name(file_name):
         tuple: (sapid, opportunity_id)
     """
     # Regex patterns for SAP ID and Opportunity ID
-    logging.info("Extracting Ids from {file_name}")
-    sapid_pattern = r"([A-Z]{4}-[A-Z0-9]{5})"  # SAP ID format
-    opportunity_id_pattern = r"([A-Z]{4}-[A-Z0-9]{5}-[A-Z0-9]{3})"  # Opportunity ID format
+    logging.info(f"Extracting Ids from {file_name}")
+    sapid_pattern = r"([A-Z0-9]{4}-[A-Z0-9]{5})"  # SAP ID format
+    opportunity_id_pattern = r"([A-Z0-9]{4}-[A-Z0-9]{5}-[A-Z0-9]{3})"  # Opportunity ID format
 
     # Extract Opportunity ID
     opportunity_id = None
@@ -165,10 +165,24 @@ def extract_ids_from_file_name(file_name):
 
     # Extract SAP ID (falls back to the shorter version if Opportunity ID is not found)
     sapid = None
+    account_number=None
     match = re.search(sapid_pattern, file_name)
     if match:
         sapid = match.group(1)
+        account_number=sapid.split("-")[0]
     else:
         "SapID not found."
-    logging.info(f"Extracted SapID : {sapid}\nExtracted opportunity ID: {opportunity_id}")
-    return sapid, opportunity_id
+    logging.info(f"Extracted Information \nAccountID:{account_number}SapID : {sapid}\nExtracted opportunity ID: {opportunity_id}------")
+    return sapid, opportunity_id,account_number
+
+
+def extract_client_name(file_path):
+    # Split the path into components
+    parts = file_path.split("/")
+    
+    # Check if the path has enough components and extract the client name
+    if len(parts) > 4:
+        client_name = parts[4]  # The 5th component (index 4) contains the client name
+        return client_name
+    else:
+        return None  # Path format is invalid or doesn't contain enough components

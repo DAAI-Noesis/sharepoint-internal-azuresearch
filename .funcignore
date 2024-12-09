@@ -1,1 +1,4 @@
 .venv
+frontend
+notebooks
+local.settings.json

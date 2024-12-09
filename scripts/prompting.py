@@ -8,6 +8,10 @@ def create_prompt_from_documents(documents):
     for doc in documents:
         doc_dict[doc["name"]].append({
             "summary": doc["summary"],
+            "client_name":doc["client_name"],
+            "client_information":doc["client_information"],
+            "region":doc["region"],
+            "industry":doc["industry"],
             #"chunk": doc["chunk"],
             "uri": doc["uri"]
         })
@@ -18,7 +22,11 @@ def create_prompt_from_documents(documents):
         # Extract the summary (it's the same for all entries of the same document)
         summary = entries[0]["summary"]
         doc_uri = entries[0]["uri"]
+        logging.info(f"DOCUMENT NAME:{doc_name}\nEntries{entries}")
         # Build the prompt
+        prompt += f"Client Name: {entries[0]['client_name']}"
+        prompt += f"Region: {entries[0]['region']}"
+        prompt += f"Industy: {entries[0]['industry']}"
         prompt += f"Document Name: {doc_name}\n"
         prompt += f"Summary: {summary}\n"
         prompt += f"URI: {doc_uri}\n"
