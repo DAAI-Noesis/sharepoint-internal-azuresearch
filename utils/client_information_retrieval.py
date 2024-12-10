@@ -1,15 +1,22 @@
 import logging
 async def get_client_info_gpt(client_name,region,industry,openai_client):
     prompt = f"""
-    Retrieve publicly available information about a client with the following information:
-    Client Name:{client_name}
-    Region:{region}
-    Industry:{industry}
+    Refined Prompt:
     
-    Keep in mind that the client name can be written as an acronym sometimes, which can lead to problems like having the sector of the client in the acronym (i.e, TAP IT, is the IT sector for TAP so the client is TAP)
-    Your answer should be a summary of what you found.
-    Keep your answer concise and to the point.
-    Answer with only the summary if you're able, otherwise say "Couldn't find information on [client_name]".
+    Retrieve publicly available information about the following client:
+
+    Client Name: {client_name}
+    Region: {region}
+    Industry: {industry}
+    When searching for information:
+
+    Use the region and industry to narrow your search, as organizations may share similar names or acronyms.
+    Focus on summarizing the client's primary services or products.
+    Guidelines for the Response:
+
+    Provide a concise and accurate summary of the client's offerings.
+    If no information can be confidently retrieved, respond with:
+    "Couldn't find information on {client_name}."
     """
     completion = await openai_client.chat.completions.create(
             model="gpt-4o",
